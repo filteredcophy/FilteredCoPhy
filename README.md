@@ -12,7 +12,10 @@ Causal discovery is at the core of human cognition. It enables us to reason abou
 # Dataset
 You can download the dataset on this <a href="www.google.com"> link (comming soon)</a>. It contains 112x112 videos as well as ground truth states, confounders and colors for each experiments. Below are some explanations for the files associated to the dataset :
 
-    ```
+## Composition
+You will find train/validation/test splits in the Datasets directory as text files containing the list of ids for each task. The experiments in FilteredCoPhy are stored in separate files. Each experiment has the same structure :
+
+```
     CoPhy_112/<TASK NAME>/<ID>
     ├── COLORS.txt # color of each block from bottom to top
     ├── ab # the observed sequence (A,B)
@@ -23,6 +26,37 @@ You can download the dataset on this <a href="www.google.com"> link (comming soo
     │   └── states.npy
     ├── confounders.npy # the confounder information for each block
     └── do_op.txt # a description of the do-operation
-    ```
-    
-    We also released the generation scripts. You can generates each task using the corresponding script in ```data_generation```.
+```
+   
+   ## Generation
+   We also released the generation scripts. You can generates each task using the corresponding script in ```data_generation```. For example, the following command will generate 1000 instances of BlocktowerCF with 4 cubes and save the result in OUTPUT_DIRECTORY :
+   
+``` python3 generate_blocktower.py --dir_out OUTPUT_DIRECTORY --seed O --n_cubes 4 --n_examples 1000    ```
+       
+ # Training / Evaluation
+ ## De-Rendering module
+ The de-rendering module can be trained using the corresponding script ```train_derendering.py```. Below is a description of the relevant parameters :
+ 
+ ```
+     --epoch          : Number of epoch for training. Evaluate the trained model if set to 0
+     --lr             : Learning rate
+     --n_keypoints    : Number of keypoints
+     --n_coefficients : Number of coefficients
+     --dataset        : 'blocktower', 'balls' or 'collision'
+     --name           : You can specify the name of the file in which the weights will be saved.
+     --mode           : Default is 'fixed'. If set to 'learned', the de-rendering module will also learn the filter bank. Otherwise, it uses fixed dilatation filters.
+ ```
+Note that the script using the dataloaders in ```Dataloaders```. You will have to specify the location of the data in the code.
+
+## CoDy
+CoDy can be trained using ```train_cody.py``` with the following most important options :
+
+```
+    --epoch : Number of epochs
+    --lr             : Learning rate
+    --dataset        : 'blocktower', 'balls' or 'collision'
+    --keypoints_model : Used to choose over different ensemble of keypoints. See dataloader for explicit usage.
+    --n_keypoints    : Number of keypoints
+```
+
+We recommand to pre-compute the keypoint with a trained de-rendering module, and save them on a single tensor. The dataloader simply load this tensor and output the corresponding item from it. This greatly increases training speed. 
