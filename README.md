@@ -37,19 +37,20 @@ You will find train/validation/test splits in the Datasets directory as text fil
  ## De-Rendering module
  The de-rendering module can be trained using the corresponding script ```train_derendering.py```. Below is a description of the relevant parameters :
  
- ```
+```
      --epoch          : Number of epoch for training. Evaluate the trained model if set to 0
      --lr             : Learning rate
      --n_keypoints    : Number of keypoints
      --n_coefficients : Number of coefficients
      --dataset        : 'blocktower', 'balls' or 'collision'
      --name           : You can specify the name of the file in which the weights will be saved.
+     --video_path     : Path to the videos
      --mode           : Default is 'fixed'. If set to 'learned', the de-rendering module will also learn the filter bank. Otherwise, it uses fixed dilatation filters.
- ```
-Note that the script using the dataloaders in ```Dataloaders```. You will have to specify the location of the data in the code.
-
+```
+Note that the script using the dataloaders in ```Dataloaders```. You will have to specify the location of the dataset in the code. We strongly recommend to pre-compute the keypoints for each experiments in the dataset using the following command:
+``` python3 generate_keypoints.py --dataset 'blocktower' --n_coefficients 4 --n_keypoints 4 --model_weight_path WEIGHTS_FILE --output_path OUTPUT_PATH  ```
 ## CoDy
-CoDy can be trained using ```train_cody.py``` with the following most important options :
+CoDy can be trained using ```train_cody.py``` with the following options :
 
 ```
     --epoch : Number of epochs
@@ -59,4 +60,9 @@ CoDy can be trained using ```train_cody.py``` with the following most important 
     --n_keypoints    : Number of keypoints
 ```
 
-We recommand to pre-compute the keypoint with a trained de-rendering module, and save them on a single tensor. The dataloader simply load this tensor and output the corresponding item from it. This greatly increases training speed. 
+The script uses keypoints dataloaders in  ```Dataloaders```. You will have to update the location in the code.
+
+## Evaluation
+We also realised our evaluation script. It generates a dictionnary containing metrics for each experiments in the training set.
+
+``` python3 evaluate_pipeline.py --dataset 'blocktower' --derendering_path PATH_TO_DERENDERING_WEIGHTS --cody_path PATH_TO_CODY_WEIGHTS --output metrics.pkl```
