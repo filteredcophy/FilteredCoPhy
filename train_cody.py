@@ -1,50 +1,40 @@
 import torch
 import argparse
-from Dataloader.Keypoints_BlocktowerCF import blocktowerCF_Keypoints
-from Dataloader.Keypoints_BallsCF import ballsCF_Keypoints
-from Dataloader.Keypoints_CollisionCF import collisionCF_Keypoints
+from Dataloader.Keypoints_Loaders import ballsCF_Keypoints, blocktowerCF_Keypoints, collisionCF_Keypoints
 import torch.nn as nn
 from Models.CoDy import CoDy
 import random
 import numpy as np
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-import os
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--epoch', default=0, type=int)
-parser.add_argument('--lr', default=1e-3, type=float)
-parser.add_argument('--dataset', default="collision", type=str)
-parser.add_argument('--keypoints_model', default="derendering", type=str)
-parser.add_argument('--n_keypoints', default=4, type=int)
-parser.add_argument('--embedding_size', default=16, type=int)
-parser.add_argument('--hidden_size', default=64, type=int)
-parser.add_argument('--n_layers', default=2, type=int)
-parser.add_argument('--name', default='cophy', type=str)
+parser.add_argument('--epoch', default=0, type=int, help="Number of Epoch for training. Can be set to 0 for evaluation")
+parser.add_argument('--lr', default=1e-3, type=float, help="Learning rate")
+parser.add_argument('--dataset', default="collision", type=str, help="Datasets, should be one of 'blocktower', 'balls' or 'collision")
+parser.add_argument('--keypoints_path', default="", type=str, help="Path to the pre-computed keypoints")
+parser.add_argument('--name', default='cophy', type=str, help="Name for weight saving")
 args = parser.parse_args()
 
 use_cuda = True
 device = torch.device("cuda" if torch.cuda.is_available() and use_cuda else "cpu")
 
+SAVE_PATH = f"trained_models/cody/{args.name}.nn"
 MSE = nn.MSELoss()
 datasets = {"blocktower": blocktowerCF_Keypoints, "balls": ballsCF_Keypoints, "collision": collisionCF_Keypoints}
 
 
-# logger.disable_save()
-
 def evaluate():
-    dataloader = DataLoader(datasets[args.dataset](mode='test', model=args.keypoints_model, n_kpts=args.n_keypoints),
-                            batch_size=16, shuffle=False)
+    dataloader = DataLoader(datasets[args.dataset](mode='test', path=args.keypoints_path), batch_size=16, shuffle=False)
 
     model = CoDy(state_size=dataloader.dataset.state_size,
-                 z_size=args.embedding_size,
                  cf_size=32,
                  emb_size=128,
-                 n_layers=args.n_layers,
+                 n_layers=2,
                  n_gn=1,
-                 hidden_size=args.hidden_size).to(device)
-    model.load_state_dict(
-        torch.load(f"trained_models/cophynet/{args.dataset}/{args.name}.nn", map_location=device))
+                 z_size=256,
+                 hidden_size=64).to(device)
+    model.load_state_dict(torch.load(SAVE_PATH, map_location=device))
     validate(model, dataloader, viz=False)
 
 
@@ -73,14 +63,13 @@ def visualize(state, predicted_state):
     plt.show()
 
 
-def validate(model, dataloader, viz=False, epoch=1000):
+def validate(model, dataloader, viz=False):
     model.eval()
-    S = dataloader.dataset.state_size
     list_loss = []
     with torch.no_grad():
         for i, x in enumerate(tqdm(dataloader, desc="Validation")):
-            ab = x["keypoints_ab"].to(device)[..., :S]
-            cd = x["keypoints_cd"].to(device)[..., :S]
+            ab = x["keypoints_ab"].to(device)
+            cd = x["keypoints_cd"].to(device)
             c = cd[:, 0]
             state_hat = model(ab, c, horizon=ab.shape[1] - 1)
 
@@ -96,11 +85,11 @@ def validate(model, dataloader, viz=False, epoch=1000):
 def get_loss(cd, cd_hat, autoencode):
     loss_kpts = MSE(cd[..., :2], cd_hat[..., :2])
     loss_coef = MSE(cd[..., 2:7], cd_hat[..., 2:7])
-    loss_speed = MSE(cd[..., :7], cd_hat[..., :7])
+    loss_state = MSE(cd[..., :7], cd_hat[..., :7])
 
     loss_encoding = MSE(cd, autoencode)
     loss = MSE(cd, cd_hat) * 1e3 + loss_encoding * 1e3
-    return [loss, loss_kpts, loss_coef, loss_speed, loss_encoding]
+    return [loss, loss_kpts, loss_coef, loss_state, loss_encoding]
 
 
 def main():
@@ -110,26 +99,17 @@ def main():
     np.random.seed(0)
     batchsize = 64
 
-    os.makedirs(f"../trained_models/cophynet/{args.dataset}", exist_ok=True)
-
-    train_dataloader = DataLoader(
-        datasets[args.dataset](mode='train', model=args.keypoints_model, n_kpts=args.n_keypoints),
-        batch_size=batchsize,
-        shuffle=True,
-        num_workers=1,
-        pin_memory=True)
-    val_dataloader = DataLoader(datasets[args.dataset](mode='val', model=args.keypoints_model, n_kpts=args.n_keypoints),
-                                batch_size=batchsize,
-                                shuffle=False,
-                                num_workers=1,
-                                pin_memory=True)
+    train_dataloader = DataLoader(datasets[args.dataset](mode='train', path=args.keypoints_path),
+                                  batch_size=batchsize, shuffle=True, num_workers=1, pin_memory=True)
+    val_dataloader = DataLoader(datasets[args.dataset](mode='val', path=args.keypoints_path),
+                                batch_size=batchsize, shuffle=False, num_workers=1, pin_memory=True)
     S = train_dataloader.dataset.state_size
     model = CoDy(state_size=S,
-                 z_size=args.embedding_size,
                  cf_size=32,
                  emb_size=128,
                  n_layers=2,
                  n_gn=1,
+                 z_size=256,
                  hidden_size=64).to(device)
 
     optim = torch.optim.Adam(model.parameters(), lr=args.lr)
@@ -140,8 +120,8 @@ def main():
         model.train()
         print("=== EPOCH ", epoch + 1, " ===")
         for i, x in enumerate(tqdm(train_dataloader, desc="Training")):
-            ab = x["keypoints_ab"].to(device)[..., :S]
-            cd = x["keypoints_cd"].to(device)[..., :S]
+            ab = x["keypoints_ab"].to(device)
+            cd = x["keypoints_cd"].to(device)
 
             c = cd[:, 0]
             state_hat = model(ab, c, horizon=ab.shape[1] - 1)
@@ -153,11 +133,10 @@ def main():
             cost[0].backward()
             optim.step()
 
-        error = validate(model, val_dataloader, epoch=epoch)
+        error = validate(model, val_dataloader)
         sched.step(error)
-        torch.save(model.state_dict(), f"../trained_models/cophynet/{args.dataset}/{args.name}.nn")
+        torch.save(model.state_dict(), SAVE_PATH)
         print("Saved!")
-
     evaluate()
 
 

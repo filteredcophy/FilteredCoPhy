@@ -1,8 +1,6 @@
 import torch
 import argparse
-from Dataloader.Video_BlocktowerCF import blocktowerCF_Video
-from Dataloader.Video_BallsCF import ballsCF_Video
-from Dataloader.Video_CollisionCF import collisionCF_Video
+from Dataloader.Video_Loaders import blocktowerCF_Video, ballsCF_Video, collisionCF_Video
 from Models.Derendering import Derendering
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
@@ -11,36 +9,37 @@ import torch.nn as nn
 import random
 from skimage.metrics import peak_signal_noise_ratio
 import numpy as np
-import os
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--epoch', default=10, type=int)
-parser.add_argument('--n_keypoints', default=4, type=int)
-parser.add_argument('--dataset', default="blocktower", type=str)
-parser.add_argument('--lr', default=0.0001, type=float)
-parser.add_argument('--n_coefficients', default=4, type=int)
-parser.add_argument('--mode', default="fixed", type=str)
-parser.add_argument('--seed', default=0, type=int)
-parser.add_argument('--name', default='derendering', type=str)
+parser.add_argument('--epoch', default=10, type=int, help="Number of Epoch for training. Can be set to 0 for evaluation")
+parser.add_argument('--n_keypoints', default=4, type=int, help="Number of keypoints to use")
+parser.add_argument('--dataset', default="blocktower", type=str, help="Datasets, should be one of 'blocktower', 'balls' or 'collision")
+parser.add_argument('--lr', default=0.0001, type=float, help="Learning Rate")
+parser.add_argument('--n_coefficients', default=4, type=int, help="Number of coefficients to use")
+parser.add_argument('--mode', default="fixed", type=str, help="'fixed': use fixed dilatation filter bank. 'learned': learn the filters via gradient descent")
+parser.add_argument('--seed', default=0, type=int, help="Random seed")
+parser.add_argument('--video_path', default="/Volumes/Samsung_T5/CoPhy_Dataset/CoPhy_112/blocktowerCF/4/", type=str, help="Path to video dataset")
+parser.add_argument('--name', default='derendering', type=str, help="Name for weight saving")
 args = parser.parse_args()
 
 use_cuda = True
 device = torch.device("cuda" if torch.cuda.is_available() and use_cuda else "cpu")
 
 MSE = nn.MSELoss()
-datasets = {"blocktower": blocktowerCF_Video, "balls": ballsCF_Video, "collision": collisionCF_Video}
 BATCHSIZE = 64
+
+SAVE_PATH = f"trained_models/unsupervisedDerendering/{args.name}.nn"
+datasets = {"blocktower": blocktowerCF_Video, "balls": ballsCF_Video, "collision": collisionCF_Video}
 
 
 def evaluate():
     print(args)
-    dataloader = DataLoader(datasets[args.dataset]('test', n_objects=4, resolution=112,
-                                                   load_video_mode="fix", mono=True, with_state=True), batch_size=1,
-                            shuffle=False)
+    dataloader = DataLoader(
+        datasets[args.dataset](mode='test', resolution=112, sampling_mode="fix", load_state=True, load_cd=True,
+                               path=args.video_path), batch_size=1, shuffle=False)
 
-    state_dict = torch.load(
-        f"trained_models/unsupervisedDerendering/{args.dataset}/4/{args.n_keypoints}/{args.name}.nn",
-        map_location=torch.device('cpu'))
+    # Path to the saved weights
+    state_dict = torch.load(SAVE_PATH, map_location=device)
 
     model = Derendering(n_keypoints=args.n_keypoints,
                         mode=args.mode,
@@ -48,21 +47,7 @@ def evaluate():
                         device=device).to(device)
 
     model.load_state_dict(state_dict)
-    validate(model, dataloader, viz=False, epoch=-1)
-
-
-def local_psnr(rgb, pred, pose_2d):
-    psnr = 0
-    size = 10
-    for k in range(pose_2d.shape[-2]):
-        x, y = int(pose_2d[0, 1, k, 0]), int(pose_2d[0, 1, k, 1])
-        if x == 0 and y == 0:
-            continue
-        if 0 < x < 112 and 0 < y < 112:
-            xmax, xmin = min(111, x + size), max(0, x - size)
-            ymax, ymin = min(111, y + size), max(0, y - size)
-            psnr += peak_signal_noise_ratio(rgb[xmin:xmax, ymin:ymax], pred[xmin:xmax, ymin:ymax], data_range=2)
-    return psnr / pose_2d.shape[-2]
+    validate(model, dataloader, viz=False)
 
 
 def vizu(source, target, target_hat, target_keypoints):
@@ -104,7 +89,7 @@ def vizu(source, target, target_hat, target_keypoints):
     plt.show()
 
 
-def validate(model, dataloader, viz=False, epoch=0):
+def validate(model, dataloader, viz=False):
     model.eval()
     list_loss = []
     with torch.no_grad():
@@ -113,19 +98,17 @@ def validate(model, dataloader, viz=False, epoch=0):
             source, target = rgb[:, 0], rgb[:, 1]
             out = model(source, target)
 
-            costs = get_loss(target, out["target"], source)
+            costs = get_loss(target, out["target"])
 
             cd = target.cpu().numpy().transpose(0, 2, 3, 1)
             predictions = out["target"].cpu().numpy().transpose(0, 2, 3, 1)
             costs.append(
                 np.mean([peak_signal_noise_ratio(cd[b], predictions[b], data_range=2) for b in range(cd.shape[0])]))
             list_loss.append(costs[0].cpu().detach().numpy())
-            if epoch == -1:
-                costs.append(local_psnr(cd, predictions, x["pose_2D_cd"]))
-            else:
-                costs.append(0)
+
             if viz:
                 vizu(rgb[:, 0], target, out["target"], out["target_keypoints"])
+
     print("Val Loss : ", np.mean(list_loss))
 
 
@@ -157,20 +140,12 @@ def main():
     random.seed(args.seed)
     np.random.seed(args.seed)
 
-    os.makedirs(f"trained_models/unsupervisedDerendering/{args.dataset}/4/{args.n_keypoints}",
-                exist_ok=True)
-
     train_dataloader = DataLoader(
-        datasets[args.dataset]('train', resolution=112, load_video_mode="rand", mono=True),
-        batch_size=BATCHSIZE,
-        num_workers=1,
-        pin_memory=True,
-        shuffle=True)
+        datasets[args.dataset](mode='train', resolution=112, sampling_mode="rand", path=args.video_path),
+        batch_size=BATCHSIZE, num_workers=1, pin_memory=True, shuffle=True)
     val_dataloader = DataLoader(
-        datasets[args.dataset]('val', resolution=112, load_video_mode='fix', mono=True),
-        batch_size=32,
-        num_workers=1,
-        pin_memory=True)
+        datasets[args.dataset](mode='val', resolution=112, sampling_mode='fix', path=args.video_path),
+        batch_size=32, num_workers=1, pin_memory=True)
 
     model = Derendering(n_keypoints=args.n_keypoints,
                         mode=args.mode,
@@ -187,7 +162,7 @@ def main():
             rgb = x['rgb_cd'].to(device)
             source, target = rgb[:, 0], rgb[:, 1]
             out = model(source, target)
-            cost = get_loss(target, out["target"], source)
+            cost = get_loss(target, out["target"])
 
             optim.zero_grad()
             cost[0].backward()
@@ -196,9 +171,8 @@ def main():
         if epoch == 100:
             optim = torch.optim.Adam(trained_params, lr=args.lr)
 
-        validate(model, val_dataloader, epoch=epoch)
-        torch.save(model.state_dict(),
-                   f"trained_models/unsupervisedDerendering/{args.dataset}/4/{args.n_keypoints}/{args.name}.nn")
+        validate(model, val_dataloader)
+        torch.save(model.state_dict(), SAVE_PATH)
     validate(model, val_dataloader)
 
 

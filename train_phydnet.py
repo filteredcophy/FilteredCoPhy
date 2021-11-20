@@ -1,8 +1,6 @@
 import torch
 import argparse
-from Dataloader.Video_BlocktowerCF import blocktowerCF_Video
-from Dataloader.Video_BallsCF import ballsCF_Video
-from Dataloader.Video_CollisionCF import collisionCF_Video
+from Dataloader.Video_Loaders import ballsCF_Video, collisionCF_Video, blocktowerCF_Video
 import torch.nn as nn
 from Models.PhyDNet import ConvLSTM, PhyCell, EncoderRNN
 from Models.constrain_moments import K2M
@@ -11,16 +9,18 @@ import numpy as np
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import torch.nn.functional as F
-import os
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--epoch', default=1, type=int)
-parser.add_argument('--lr', default=1e-3, type=float)
-parser.add_argument('--dataset', default="collision", type=str)
-parser.add_argument('--mode', default="long", type=str)
-parser.add_argument('--n_layers', default=1, type=int)
-parser.add_argument('--layer_size', default=49, type=int)
-parser.add_argument('--name', default='phydnet', type=str)
+parser.add_argument('--epoch', default=1, type=int, help="Number of Epoch for training. Can be set to 0 for evaluation")
+parser.add_argument('--lr', default=1e-3, type=float, help="Learning Rate")
+parser.add_argument('--dataset', default="collision", type=str,
+                    help="Datasets, should be one of 'blocktower', 'balls' or 'collision")
+parser.add_argument('--mode', default="long", type=str,
+                    help="'long': train to predict the entire video from 1 img. "
+                         "'short':train to predict 10 frames from the 10 previous ones")
+parser.add_argument('--n_layers', default=1, type=int, help="Number of layers in phycell")
+parser.add_argument('--layer_size', default=49, type=int, help="Size of layer in phycell")
+parser.add_argument('--name', default='phydnet', type=str, help="Name for weight saving")
 args = parser.parse_args()
 
 use_cuda = True
@@ -29,7 +29,9 @@ device = torch.device("cuda" if torch.cuda.is_available() and use_cuda else "cpu
 MSE = nn.MSELoss()
 BATCHSIZE = 12
 
+SAVE_PATH = f"trained_models/PhyDNet/{args.name}.nn"
 datasets = {"blocktower": blocktowerCF_Video, "balls": ballsCF_Video, "collision": collisionCF_Video}
+
 constraints = torch.zeros((49, 7, 7)).to(device)
 ind = 0
 for i in range(0, 7):
@@ -38,22 +40,17 @@ for i in range(0, 7):
         ind += 1
 
 
-# logger.disable_save()
-
 def evaluate():
     dataloader = DataLoader(
-        datasets[args.dataset](mode='test', resolution=112, load_video_mode="full",
-                               with_cd=True, with_ab=False), batch_size=1,
-        shuffle=False,
-        num_workers=4,
-        pin_memory=True)
+        datasets[args.dataset](mode='test', resolution=112, sampling_mode="full", load_cd=True, load_ab=False),
+        batch_size=1, shuffle=False, num_workers=4, pin_memory=True)
+
     phycell = PhyCell(input_shape=(28, 28), input_dim=64, F_hidden_dims=[args.layer_size] * args.n_layers,
                       n_layers=args.n_layers, kernel_size=(7, 7), device=device)
     convcell = ConvLSTM(input_shape=(28, 28), input_dim=64, hidden_dims=[128, 64], n_layers=2, kernel_size=(3, 3),
                         device=device)
     model = EncoderRNN(phycell, convcell, device)
-    model.load_state_dict(
-        torch.load(f"trained_models/PhyDNet/{args.dataset}/{args.name}.nn", map_location=device))
+    model.load_state_dict(torch.load(SAVE_PATH, map_location=device))
 
     validate(model, dataloader, viz=True)
 
@@ -77,7 +74,7 @@ def visualize(cd, cd_hat):
     plt.show()
 
 
-def validate(model, dataloader, viz=False, epoch=1000):
+def validate(model, dataloader, viz=False):
     model.eval()
     list_loss = []
     with torch.no_grad():
@@ -140,20 +137,12 @@ def main():
     random.seed(0)
     np.random.seed(0)
 
-    os.makedirs(f"../trained_models/PhyDNet/{args.dataset}", exist_ok=True)
-
     train_dataloader = DataLoader(
-        datasets[args.dataset](mode='train', resolution=112, load_video_mode="full",
-                               with_cd=True, with_ab=False), batch_size=BATCHSIZE,
-        shuffle=True,
-        num_workers=4,
-        pin_memory=True)
+        datasets[args.dataset](mode='train', resolution=112, sampling_mode="full", load_cd=True, load_ab=False),
+        batch_size=BATCHSIZE, shuffle=True, num_workers=4, pin_memory=True)
     val_dataloader = DataLoader(
-        datasets[args.dataset](mode='val', resolution=112, load_video_mode="full",
-                               with_cd=True, with_ab=False), batch_size=BATCHSIZE,
-        shuffle=False,
-        num_workers=4,
-        pin_memory=True)
+        datasets[args.dataset](mode='val', resolution=112, sampling_mode="full", load_cd=True, load_ab=False),
+        batch_size=BATCHSIZE, shuffle=False, num_workers=4, pin_memory=True)
 
     phycell = PhyCell(input_shape=(28, 28), input_dim=64, F_hidden_dims=[args.layer_size] * args.n_layers,
                       n_layers=args.n_layers, kernel_size=(7, 7), device=device)
@@ -178,7 +167,7 @@ def main():
             else:
                 input_image = cd[:, :1]
                 target_image = cd[:, 1:]
-            # print(cd.shape, input_image.shape, target_image.shape)
+
             cost = torch.zeros(1).to(device)
             for ei in range(input_image.shape[1] - 1):
                 encoder_output, encoder_hidden, output_image, _, _ = model(input_image[:, ei, :, :, :], (ei == 0))
@@ -207,10 +196,9 @@ def main():
             cost.backward()
             optim.step()
 
-        error = validate(model, val_dataloader, epoch=epoch)
+        error = validate(model, val_dataloader)
         sched.step(error)
-        torch.save(model.state_dict(), f"../trained_models/PhyDNet/{args.dataset}/{args.name}.nn")
-        print("Saved!")
+        torch.save(model.state_dict(), SAVE_PATH)
 
     evaluate()
 

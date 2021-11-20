@@ -1,8 +1,6 @@
 import torch
 import argparse
-from Dataloader.Keypoints_BlocktowerCF import blocktowerCF_Keypoints
-from Dataloader.Keypoints_BallsCF import ballsCF_Keypoints
-from Dataloader.Keypoints_CollisionCF import collisionCF_Keypoints
+from Dataloader.Keypoints_Loaders import blocktowerCF_Keypoints, ballsCF_Keypoints, collisionCF_Keypoints
 import torch.nn as nn
 from Models.VCDN_Keypoints import DynaNetGNN
 import random
@@ -13,34 +11,33 @@ from torch.distributions.multivariate_normal import MultivariateNormal
 import torch.nn.functional as F
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--epoch', default=1, type=int)
-parser.add_argument('--lr', default=1e-3, type=float)
-parser.add_argument('--k', default=16, type=int)
-parser.add_argument('--nf', default=16 * 4, type=int)
-parser.add_argument('--mode', default="long", type=str)
+parser.add_argument('--epoch', default=1, type=int, help="Number of Epoch for training. Can be set to 0 for evaluation")
+parser.add_argument('--lr', default=1e-3, type=float, help="Learning rate")
+parser.add_argument('--n_keypoints', default=16, type=int, help="Number of keypoints")
+parser.add_argument('--mode', default="long", type=str,
+                    help="'long' predicts the entire video from 1 image. "
+                         "'short' predicts 10 frames from the 5 previous ones")
 parser.add_argument('--dataset', default="blocktower", type=str)
-parser.add_argument('--name', default='vcdn', type=str)
+parser.add_argument('--keypoints_path', default="", type=str,
+                    help="Datasets, should be one of 'blocktower', 'balls' or 'collision")
+parser.add_argument('--name', default='vcdn', type=str, help="Name for weight saving")
 args = parser.parse_args()
 
 use_cuda = True
 device = torch.device("cuda" if torch.cuda.is_available() and use_cuda else "cpu")
 
 MSE = nn.MSELoss()
+SAVE_PATH = f"trained_models/VCDN/{args.name}.nn"
 BATCHSIZE = 32
 datasets = {"blocktower": blocktowerCF_Keypoints, "balls": ballsCF_Keypoints, "collision": collisionCF_Keypoints}
 
 
 def evaluate():
-    dataloader = DataLoader(
-        datasets[args.dataset](mode='test', model=f"derendering_{args.k}kpts_nocoef", n_kpts=args.k),
-        batch_size=16,
-        shuffle=True,
-        num_workers=1,
-        pin_memory=True)
-    model = DynaNetGNN(k=args.k, nf=args.nf, use_batchnorm=True).to(device)
-    model.load_state_dict(
-        torch.load(f"trained_models/VCDN/{args.dataset}/{args.name}.nn", map_location=device))
+    dataloader = DataLoader(datasets[args.dataset](mode='test', path=args.keypoints_path),
+                            batch_size=16, shuffle=True, num_workers=1, pin_memory=True)
 
+    model = DynaNetGNN(k=args.n_keypoints, nf=4 * 16, use_batchnorm=True).to(device)
+    model.load_state_dict(torch.load(SAVE_PATH, map_location=device))
     validate(model, dataloader, viz=False)
 
 
@@ -60,13 +57,13 @@ def visualize(state, predicted_state):
     plt.show()
 
 
-def validate(model, dataloader, viz=False, epoch=1000):
+def validate(model, dataloader, viz=False):
     model.eval()
     list_loss = []
     with torch.no_grad():
         for i, x in enumerate(tqdm(dataloader, desc="Validation")):
-            ab = x["keypoints_ab"].to(device)[..., :2]
-            cd = x["keypoints_cd"].to(device)[..., :2]
+            ab = x["keypoints_ab"].to(device)
+            cd = x["keypoints_cd"].to(device)
 
             if args.mode == "long":
                 c = cd[:, :1]
@@ -119,21 +116,13 @@ def main():
     np.random.seed(21)
     batchsize = 8
 
-    train_dataloader = DataLoader(
-        datasets[args.dataset](mode='train', model=f"derendering_{args.k}kpts_nocoef", n_kpts=args.k),
-        batch_size=batchsize,
-        shuffle=True,
-        num_workers=1,
-        pin_memory=True)
+    train_dataloader = DataLoader(datasets[args.dataset](mode='train', path=args.keypoints_path),
+                                  batch_size=batchsize, shuffle=True, num_workers=1, pin_memory=True)
 
-    val_dataloader = DataLoader(
-        datasets[args.dataset](mode='val', model=f"derendering_{args.k}kpts_nocoef", n_kpts=args.k),
-        batch_size=batchsize,
-        shuffle=True,
-        num_workers=1,
-        pin_memory=True)
+    val_dataloader = DataLoader(datasets[args.dataset](mode='val', path=args.keypoints_path),
+                                batch_size=batchsize, shuffle=True, num_workers=1, pin_memory=True)
 
-    model = DynaNetGNN(k=args.k, nf=args.nf, use_batchnorm=True).to(device)
+    model = DynaNetGNN(k=args.n_keypoints, nf=4 * 16, use_batchnorm=True).to(device)
 
     optim = torch.optim.Adam(model.parameters(), lr=args.lr)
     sched = torch.optim.lr_scheduler.ReduceLROnPlateau(optim, mode="min", factor=0.6, patience=2, verbose=True)
@@ -142,8 +131,8 @@ def main():
         model.train()
         print("=== EPOCH ", epoch + 1, " ===")
         for i, x in enumerate(tqdm(train_dataloader, desc="Training")):
-            ab = x["keypoints_ab"].to(device)[..., :2]
-            cd = x["keypoints_cd"].to(device)[..., :2]
+            ab = x["keypoints_ab"].to(device)
+            cd = x["keypoints_cd"].to(device)
 
             if args.mode == "long":
                 c = cd[:, :1]
@@ -161,9 +150,9 @@ def main():
             cost[0].backward()
             optim.step()
 
-        error = validate(model, val_dataloader, epoch=epoch)
+        error = validate(model, val_dataloader)
         sched.step(error)
-        torch.save(model.state_dict(), f"../trained_models/VCDN/{args.dataset}/{args.name}.nn")
+        torch.save(model.state_dict(), SAVE_PATH)
         print("Saved!")
 
     evaluate()
