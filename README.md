@@ -10,7 +10,7 @@ Causal discovery is at the core of human cognition. It enables us to reason abou
 
 
 # Dataset
-You can download the dataset on this <a href="www.google.com"> link (comming soon)</a>. It contains 112x112 videos as well as ground truth states, confounders and colors for each experiments. Below are some explanations for the files associated to the dataset :
+You can download the dataset on this <a href="https://zenodo.org/record/5906002#.YfFG1PXMKCe"> link</a>. It contains 112x112 videos as well as ground truth states, confounders and colors for each experiments. Below are some explanations for the files associated to the dataset :
 
 ## Composition
 You will find train/validation/test splits in the Datasets directory as text files containing the list of ids for each task. The experiments in FilteredCoPhy are stored in separate files. Each experiment has the same structure :
@@ -66,3 +66,15 @@ The script uses keypoints dataloaders in  ```Dataloaders```. You will have to up
 We also realised our evaluation script. It generates a dictionnary containing metrics for each experiments in the training set.
 
 ``` python3 evaluate_pipeline.py --dataset 'blocktower' --derendering_path PATH_TO_DERENDERING_WEIGHTS --cody_path PATH_TO_CODY_WEIGHTS --output metrics.pkl```
+
+# Citation
+```@inproceedings{janny2022FilteredCoPhy,
+    title = "Filtered-CoPhy: Unsupervised Learning of Counterfactual Physics in Pixel Space",
+    author = {Janny, Steeven  and
+              Baradel, Fabien  and
+              Neverova, Natalia  and
+              Nadri, Madiha  and
+              Mori, Greg  and
+              Wolf, Christian},
+    booktitle = "International Conference on Learning Representations (ICLR)",
+    year = "2022"}```
