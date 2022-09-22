@@ -22,9 +22,12 @@ class Keypoints_loader(Dataset):
         keypoints_cd = np.load(os.path.join(self.dataloc, str(ex), "keypoints_cd.npy"))
 
         T, K, S = keypoints_ab.shape
-        keypoints_ab = np.concatenate([torch.zeros(1, K, S), keypoints_ab[1:] - keypoints_ab[:-1]], axis=0)
-        keypoints_cd = np.concatenate([torch.zeros(1, K, S), keypoints_cd[1:] - keypoints_cd[:-1]], axis=0)
-
+        speed_ab = np.concatenate([torch.zeros(1, K, S), keypoints_ab[1:] - keypoints_ab[:-1]], axis=0)
+        speed_cd = np.concatenate([torch.zeros(1, K, S), keypoints_cd[1:] - keypoints_cd[:-1]], axis=0)
+        
+        keypoints_ab = np.concatenate([keypoints_ab, speed_ab], axis=-1)
+        keypoints_cd = np.concatenate([keypoints_cd, speed_cd], axis=-1)
+        
         out = {"keypoints_ab": keypoints_ab, "keypoints_cd": keypoints_cd, 'ex': ex}
         return out
 
